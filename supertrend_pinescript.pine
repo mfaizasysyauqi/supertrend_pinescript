@@ -1,0 +1,90 @@
+//@version=5
+strategy("SuperTrend Long Bot", overlay=true, format=format.price, precision=2, 
+     default_qty_type=strategy.cash, default_qty_value=10000,
+     commission_type=strategy.commission.percent, commission_value=0.05)
+
+// === INPUT GROUPS ===
+
+// 🔵 PRIORITAS 1: Parameter Inti SuperTrend (Berimpact Tinggi)
+Periods = input.int(title="ATR Period", defval=4, minval=1, maxval=50, group="🔵 CORE SUPERTREND")
+Multiplier = input.float(title="ATR Multiplier", step=0.1, defval=2.0, minval=0.5, maxval=10.0, group="🔵 CORE SUPERTREND")
+
+// 🛡️ PRIORITAS 2: Manajemen Risiko (Kritis untuk Survivability)
+risk_per_trade = input.float(2, title="Risk per Trade (%)", minval=0.1, maxval=100, step=1, group="🛡️ RISK MANAGEMENT") / 100
+
+// 🗓️ PRIORITAS 3: Filter Tanggal
+useDateFilter = input.bool(false, "Enable Date Filter", group="🗓️ DATE FILTER")
+startYear = input.int(2022, "Start Year", minval=1900, maxval=2100, group="🗓️ DATE FILTER")
+startMonth = input.int(1, "Start Month", minval=1, maxval=12, group="🗓️ DATE FILTER")
+startDay = input.int(1, "Start Day", minval=1, maxval=31, group="🗓️ DATE FILTER")
+endYear = input.int(2025, "End Year", minval=2010, maxval=2100, group="🗓️ DATE FILTER")
+endMonth = input.int(12, "End Month", minval=1, maxval=12, group="🗓️ DATE FILTER")
+endDay = input.int(31, "End Day", minval=1, maxval=31, group="🗓️ DATE FILTER")
+
+// ⚙️ PRIORITAS 4: Opsi Kalkulasi (Preferensi Teknis)
+changeATR = input.bool(title="Use True Range ATR", defval=true, group="⚙️ CALCULATION OPTIONS")
+
+// 📊 PRIORITAS 5: Tampilan Display (Hanya Visual)
+showsignals = input.bool(title="Show Signal Labels", defval=true, group="📊 DISPLAY SETTINGS")
+showTrendLine = input.bool(title="Show SuperTrend Line", defval=true, group="📊 DISPLAY SETTINGS")
+
+// === ATR & SUPERTREND LOGIC ===
+atr2 = ta.sma(ta.tr, Periods)
+atr = changeATR ? ta.atr(Periods) : atr2
+
+up = close - (Multiplier * atr)
+up1 = na(up[1]) ? up : up[1]
+up := close[1] > up1 ? math.max(up, up1) : up
+
+dn = close + (Multiplier * atr)
+dn1 = na(dn[1]) ? dn : dn[1]
+dn := close[1] < dn1 ? math.min(dn, dn1) : dn
+
+trend = 1
+trend := na(trend[1]) ? trend : trend[1]
+trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
+
+// === DATE FILTER CONDITION ===
+inDateRange = not useDateFilter or (time >= timestamp(startYear, startMonth, startDay, 00, 00) and time <= timestamp(endYear, endMonth, endDay, 23, 59))
+
+// === FORCE CLOSE WHEN DATE RANGE ENDS ===
+dateRangeJustEnded = useDateFilter and not inDateRange and inDateRange[1]
+
+// === SIGNALS ===
+buySignal = trend == 1 and trend[1] == -1 and inDateRange
+sellSignal = trend == -1 and trend[1] == 1 and inDateRange
+
+// === SUPERTREND LINE PLOT (BERWARNA) ===
+trendColor = trend == 1 ? color.new(color.green, 0) : color.new(color.red, 0)
+plot(showTrendLine ? (trend == 1 ? up : dn) : na, "SuperTrend", color=trendColor, style=plot.style_line, linewidth=2)
+
+// === PLOTS ===
+plotshape(buySignal and showsignals, title="Buy", text="BUY", location=location.belowbar, style=shape.labelup, size=size.small, color=color.new(color.green, 0), textcolor=color.white)
+plotshape(sellSignal and showsignals, title="Sell", text="SELL", location=location.abovebar, style=shape.labeldown, size=size.small, color=color.new(color.red, 0), textcolor=color.white)
+
+// === RISK MANAGEMENT ===
+var float entry_price = na
+var float stop_loss_price = na
+
+if buySignal
+    entry_price := close
+    stop_loss_price := up
+
+// === POSITION SIZE ===
+capital = strategy.equity
+risk_amount = capital * risk_per_trade
+stop_loss_points = math.abs(entry_price - stop_loss_price)
+position_size = stop_loss_points != 0 ? risk_amount / stop_loss_points : 0
+
+// === STRATEGY ENTRY & EXIT ===
+if buySignal
+    strategy.entry("Long", strategy.long, qty=position_size, comment="Enter Long")
+
+if (sellSignal and strategy.position_size > 0) or dateRangeJustEnded
+    strategy.close("Long", comment="Exit to Cash")
+
+// === ALERT CONDITIONS ===
+alertcondition(buySignal, title="SuperTrend Buy", 
+          message="🔵 BUY Signal - {{ticker}}, Price: {{close}}")
+alertcondition(sellSignal, title="SuperTrend Sell", 
+          message="🔴 SELL Signal - {{ticker}}, Price: {{close}}")
